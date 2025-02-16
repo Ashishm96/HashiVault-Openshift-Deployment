@@ -7,10 +7,11 @@ on:
 
 jobs:
   build_and_deploy:
-    runs-on: ubuntu-latest  # Use an Ubuntu runner for the GitHub Actions workflow
+    #runs-on: ubuntu-latest  # Use an Ubuntu runner for the GitHub Actions workflow
+    runs-on: self-hosted  # Use self hosted runner for the GitHub Actions workflow
 
     env:
-      JFROG_REGISTRY: "trialb9kyjn.jfrog.io"
+      JFROG_REGISTRY: "trial086vpt.jfrog.io"
       JFROG_REPO: "vault-repo"
       IMAGE_NAME: "vault-server"
       BASE_VERSION: "1.0"
@@ -29,9 +30,9 @@ jobs:
     - name: Verify Docker Access
       run: docker --version
 
-    # Step 3: Set up Docker Buildx (for multi-platform builds)
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v2
+    # Step 3: Set up Docker Buildx (for multi-platform builds) - IF USING GITHUB ACTION THEN "REQUIRED"(uncomment)
+    #- name: Set up Docker Buildx
+    #  uses: docker/setup-buildx-action@v2
 
     # Step 4: Log in to JFrog Artifactory
     - name: Log in to JFrog Artifactory
@@ -61,7 +62,7 @@ jobs:
         echo "Pulling Docker image from Artifactory for verification..."
         docker pull ${{ env.JFROG_REGISTRY }}/${{ env.JFROG_REPO }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
 
-    # Step 8: Set up Helm
+    # Step 8: Set up Helm (Using GITHUB ACTION) IF NOT SETUP
     #- name: Set up Helm
     #  uses: deliverybot/helm-action@v2
     
@@ -75,27 +76,57 @@ jobs:
         echo "Installing Helm..."
         curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 
+
+    # Step 9: Install OpenShift CLI (oc) IF CLI is Not Install install Using Github Action Runner
+    #- name: Install OpenShift CLI
+    #  run: |
+     #   echo "Installing OpenShift CLI..."
+      #  curl -L https://mirror.openshift.com/pub/openshift-v4/clients/ocp/stable/openshift-client-linux.tar.gz -o oc.tar.gz
+       # tar -xvf oc.tar.gz
+        #chmod +x oc
+     #   sudo mv oc /usr/local/bin/
+     #   oc version
+
+
+        # Test DNS Resolution (Testing URL is Hosted or not)
+   # - name: Test DNS Resolution for OpenShift API
+   #   run: |
+   #     nslookup api.microshift-demo.example-yt.com (Openshift cluster URL)
+
+   
     # Step 10: Log in to OpenShift
-    - name: Log in to OpenShift
+    - name: Log in to OpenShift using Username and Password
       run: |
         echo "Logging in to OpenShift..."
-        echo ${{ secrets.OPENSHIFT_TOKEN }} | oc login --token=${{ secrets.OPENSHIFT_TOKEN }} --server=${{ secrets.OPENSHIFT_SERVER }}
+        oc login --server=${{ secrets.OPENSHIFT_SERVER }} \
+          -u ${{ secrets.OPENSHIFT_USERNAME }} \
+          -p ${{ secrets.OPENSHIFT_PASSWORD }} --insecure-skip-tls-verify=true
+      
+       #not using  echo ${{ secrets.OPENSHIFT_TOKEN }} | oc login --token=${{ secrets.OPENSHIFT_TOKEN }} --server=${{ secrets.OPENSHIFT_SERVER }}
 
+    
     # Step 11: Prepare Namespace
     - name: Create Namespace if Not Exists
       run: |
-        echo "Preparing Kubernetes namespace..."
-        kubectl get namespace ${{ env.K8S_NAMESPACE }} || kubectl create namespace ${{ env.K8S_NAMESPACE }}
+        echo "Preparing OpenShift Project..."
+        if oc get secret jfrog-registry-secret -n ${{ env.K8S_NAMESPACE }} >/dev/null 2>&1; then
+          oc new-project ${{ env.K8S_NAMESPACE }}
+        fi
 
     # Step 12: Set up OpenShift Image Pull Secret for JFrog
     - name: Set up Image Pull Secret for JFrog Artifactory
       run: |
-        echo "Creating image pull secret for JFrog Artifactory..."
-        oc create secret docker-registry jfrog-registry-secret \
-          --docker-username=${{ secrets.JFROG_USERNAME }} \
-          --docker-password=${{ secrets.JFROG_PASSWORD }} \
-          --docker-server=${{ env.JFROG_REGISTRY }}
-        oc secrets link default jfrog-registry-secret --for=pull
+        if oc get secret jfrog-registry-secret -n vault-deployment >/dev/null 2>&1; then
+          echo "Secret already exists, skipping creation."
+        else
+          echo "Creating image pull secret for JFrog Artifactory..."
+          oc create secret docker-registry jfrog-registry-secret \
+            --docker-username=${{ secrets.JFROG_USERNAME }} \
+            --docker-password=${{ secrets.JFROG_PASSWORD }} \
+            --docker-server=${{ env.JFROG_REGISTRY }} \
+            --namespace=${{ env.K8S_NAMESPACE }}
+        fi
+        oc secrets link default jfrog-registry-secret --for=pull --namespace=${{ env.K8S_NAMESPACE }}
 
     # Step 13: Dry Run Helm Deployment
     - name: Helm Dry Run
@@ -116,11 +147,12 @@ jobs:
           --namespace ${{ env.K8S_NAMESPACE }} \
           --set image.repository=${{ env.JFROG_REGISTRY }}/${{ env.JFROG_REPO }}/${{ env.IMAGE_NAME }} \
           --set image.tag=${{ env.IMAGE_TAG }} \
-          --set server.ha.enabled=true \
-          --create-namespace
+          --set server.ha.enabled=true #\
+          #--create-namespace (not creating namespace)
 
     # Step 15: Detailed Health Check
     - name: Detailed Health Check
+      if: always()
       run: |
         echo "Checking deployment and pod health..."
         kubectl get all --namespace=${{ env.K8S_NAMESPACE }}
