@@ -1,11 +1,21 @@
-# Use the official HashiCorp Vault image
-FROM hashicorp/vault:latest
+# Use the official HashiCorp Vault image with a specified version
+FROM hashicorp/vault:1.13.3
 
-# Set Vault to development mode (not recommended for production)
-ENV VAULT_DEV_ROOT_TOKEN_ID="root"
+# Set working directory
+WORKDIR /vault
 
-# Expose the default Vault port
+# Create necessary directories
+RUN mkdir -p /vault/config /vault/data
+
+# Copy Vault configuration file
+COPY docker/config.hcl /vault/config/config.hcl
+
+# Expose Vault API port
 EXPOSE 8200
 
-# Command to start Vault server in development mode
-CMD ["server", "-dev"]
+# Health check with vault CLI (ensure Vault is initialized & unsealed)
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s \
+  CMD vault status || exit 1
+
+# Start Vault with the configuration file
+CMD ["vault", "server", "-config=/vault/config/config.hcl"]
